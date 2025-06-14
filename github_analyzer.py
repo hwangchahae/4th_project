@@ -30,7 +30,7 @@ import asyncio
 import sys
 
 # ----------------- 상수 정의 -----------------
-MAIN_EXTENSIONS = ['.py', '.js', '.md']  # 분석할 주요 파일 확장자
+MAIN_EXTENSIONS = ['.py', '.js', '.md', '.ts', '.java', '.cpp', '.h', '.hpp', '.c', '.cs']  # 분석할 주요 파일 확장자
 CHUNK_SIZE = 500  # 텍스트 청크 크기
 GITHUB_TOKEN = "GITHUB_TOKEN"  # 환경 변수 키 이름
 KEY_FILE = ".key"  # 암호화 키 파일
@@ -1024,6 +1024,129 @@ class RepositoryEmbedder:
                         chunks.append((chunk, t_start, t_end, None, None, 1, len(source_code.splitlines()), None, 0, None))
                 
                 return chunks
+
+            def chunk_typescript(source_code):
+                """TypeScript 코드를 구조적으로 청킹하는 함수"""
+                # TypeScript는 JavaScript와 유사한 패턴을 사용하되, 타입 관련 패턴 추가
+                func_pattern = r'(async\s+)?function\s+(\w+)\s*<[^>]*>?\s*\([^)]*\)\s*:\s*[^{]*\{'
+                arrow_func_pattern = r'(const|let|var)\s+(\w+)\s*:\s*[^=]*=\s*(async\s+)?\([^)]*\)\s*=>'
+                class_pattern = r'(export\s+)?(abstract\s+)?class\s+(\w+)(\s+extends\s+(\w+))?(\s+implements\s+[^{]*)?\s*\{'
+                interface_pattern = r'(export\s+)?interface\s+(\w+)(\s+extends\s+[^{]*)?\s*\{'
+                
+                return chunk_js(source_code)  # JavaScript 청킹 로직 재사용
+
+            def chunk_java(source_code):
+                """Java 코드를 구조적으로 청킹하는 함수"""
+                # Java 패턴
+                class_pattern = r'(public|private|protected)?\s*(abstract|final)?\s*class\s+(\w+)(\s+extends\s+(\w+))?(\s+implements\s+[^{]*)?\s*\{'
+                method_pattern = r'(public|private|protected|static|final|abstract|synchronized|native|strictfp)?\s*(\w+)\s+(\w+)\s*\([^)]*\)\s*(throws\s+[^{]*)?\s*\{'
+                interface_pattern = r'(public|private|protected)?\s*interface\s+(\w+)(\s+extends\s+[^{]*)?\s*\{'
+                
+                lines = source_code.splitlines()
+                chunks = []
+                
+                # 임포트문 찾기
+                import_lines = []
+                for i, line in enumerate(lines):
+                    if re.match(r'^\s*(import|package)\b', line):
+                        import_lines.append(line)
+                
+                imports_text = '\n'.join(import_lines)
+                
+                # 정규식 패턴 매칭으로 함수/클래스 찾기
+                def find_block_end(start_line, opening_char='{', closing_char='}'):
+                    balance = 0
+                    for i in range(start_line, len(lines)):
+                        line = lines[i]
+                        balance += line.count(opening_char) - line.count(closing_char)
+                        if balance <= 0:
+                            return i
+                    return len(lines) - 1
+                
+                i = 0
+                while i < len(lines):
+                    line = lines[i]
+                    
+                    # 클래스 찾기
+                    class_match = re.search(class_pattern, line)
+                    if class_match:
+                        start_line = i
+                        end_line = find_block_end(i)
+                        class_content = '\n'.join(lines[start_line:end_line + 1])
+                        chunks.append((class_content, start_line, end_line, None, class_match.group(3), 1, len(lines)))
+                        i = end_line + 1
+                        continue
+                    
+                    # 메소드 찾기
+                    method_match = re.search(method_pattern, line)
+                    if method_match:
+                        start_line = i
+                        end_line = find_block_end(i)
+                        method_content = '\n'.join(lines[start_line:end_line + 1])
+                        chunks.append((method_content, start_line, end_line, None, method_match.group(3), 1, len(lines)))
+                        i = end_line + 1
+                        continue
+                    
+                    i += 1
+                
+                return chunks
+
+            def chunk_cpp(source_code):
+                """C++ 코드를 구조적으로 청킹하는 함수"""
+                # C++ 패턴
+                class_pattern = r'(class|struct)\s+(\w+)(\s*:\s*(public|private|protected)\s+(\w+))?\s*\{'
+                function_pattern = r'(\w+)\s+(\w+::)?(\w+)\s*\([^)]*\)\s*(const)?\s*\{'
+                namespace_pattern = r'namespace\s+(\w+)\s*\{'
+                
+                lines = source_code.splitlines()
+                chunks = []
+                
+                # 헤더 포함문 찾기
+                include_lines = []
+                for i, line in enumerate(lines):
+                    if re.match(r'^\s*#include\b', line):
+                        include_lines.append(line)
+                
+                includes_text = '\n'.join(include_lines)
+                
+                # 정규식 패턴 매칭으로 함수/클래스 찾기
+                def find_block_end(start_line, opening_char='{', closing_char='}'):
+                    balance = 0
+                    for i in range(start_line, len(lines)):
+                        line = lines[i]
+                        balance += line.count(opening_char) - line.count(closing_char)
+                        if balance <= 0:
+                            return i
+                    return len(lines) - 1
+                
+                i = 0
+                while i < len(lines):
+                    line = lines[i]
+                    
+                    # 클래스/구조체 찾기
+                    class_match = re.search(class_pattern, line)
+                    if class_match:
+                        start_line = i
+                        end_line = find_block_end(i)
+                        class_content = '\n'.join(lines[start_line:end_line + 1])
+                        chunks.append((class_content, start_line, end_line, None, class_match.group(2), 1, len(lines)))
+                        i = end_line + 1
+                        continue
+                    
+                    # 함수 찾기
+                    func_match = re.search(function_pattern, line)
+                    if func_match:
+                        start_line = i
+                        end_line = find_block_end(i)
+                        func_content = '\n'.join(lines[start_line:end_line + 1])
+                        chunks.append((func_content, start_line, end_line, None, func_match.group(3), 1, len(lines)))
+                        i = end_line + 1
+                        continue
+                    
+                    i += 1
+                
+                return chunks
+
             # 1. 전체 청크 수집
             all_chunks = []
             for file in files:
@@ -1040,6 +1163,12 @@ class RepositoryEmbedder:
                     chunks = chunk_markdown(content)
                 elif ext == '.js':
                     chunks = chunk_js(content)
+                elif ext == '.ts':
+                    chunks = chunk_typescript(content)
+                elif ext in ['.java']:
+                    chunks = chunk_java(content)
+                elif ext in ['.cpp', '.h', '.hpp', '.c']:
+                    chunks = chunk_cpp(content)
                 else:
                     # 오류 수정: 일반 파일은 split_by_tokens로 처리하고 7개 필드 구조에 맞게 조정
                     simple_chunks = split_by_tokens(content, max_tokens=256, overlap=64)
