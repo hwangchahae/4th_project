@@ -30,13 +30,15 @@ import asyncio
 import sys
 
 # ----------------- 상수 정의 -----------------
-MAIN_EXTENSIONS = ['.py', '.js', '.md', '.ts', '.java', '.cpp', '.h', '.hpp', '.c', '.cs']  # 분석할 주요 파일 확장자
+MAIN_EXTENSIONS = ['.py', '.js', '.md', '.ts', '.java', '.cpp', '.h', '.hpp', '.c', '.cs', '.txt']  # 분석할 주요 파일 확장자
 CHUNK_SIZE = 500  # 텍스트 청크 크기
 GITHUB_TOKEN = "GITHUB_TOKEN"  # 환경 변수 키 이름
 KEY_FILE = ".key"  # 암호화 키 파일
 
-# ChromaDB 기본 클라이언트 (로컬)
-chroma_client = chromadb.Client()
+# ChromaDB 영구 저장소 클라이언트
+REPO_DB_PATH = "./repo_analysis_db"
+os.makedirs(REPO_DB_PATH, exist_ok=True)
+chroma_client = chromadb.PersistentClient(path=REPO_DB_PATH)
 
 def analyze_repository(repo_url: str, token: Optional[str] = None, session_id: Optional[str] = None) -> Dict[str, Any]:
     """
@@ -1091,60 +1093,68 @@ class RepositoryEmbedder:
                 
                 return chunks
 
-            def chunk_cpp(source_code):
-                """C++ 코드를 구조적으로 청킹하는 함수"""
-                # C++ 패턴
-                class_pattern = r'(class|struct)\s+(\w+)(\s*:\s*(public|private|protected)\s+(\w+))?\s*\{'
-                function_pattern = r'(\w+)\s+(\w+::)?(\w+)\s*\([^)]*\)\s*(const)?\s*\{'
-                namespace_pattern = r'namespace\s+(\w+)\s*\{'
-                
+            def chunk_c_family(source_code: str) -> List[Tuple[str, int, int, Optional[str], Optional[str], int, int, Optional[str], int, Optional[str]]]:
+                """C/C++/C#/Objective-C/헤더 파일을 구조적으로 청킹하는 함수"""
+                # C 계열 언어 패턴 (C, C++, Objective-C, C#, 헤더 파일 공통 적용)
+                # 클래스/구조체/enum/interface/namespace/메소드/함수 정의 등을 포괄
+                class_struct_pattern = r'(class|struct|enum|interface|namespace)\s+(\w+)([^{;]*)\{'
+                function_method_pattern = r'(\w+)?\s*(\w+::)?(\w+)\s*\([^)]*\)(\s*const)?\s*(\\s*throws\s+[^{]*)?\s*\{'
+                # 간단한 코드 블록, if/for/while/try-catch 등의 블록도 포함 (구조적 청킹 실패 시 대비)
+
                 lines = source_code.splitlines()
                 chunks = []
-                
-                # 헤더 포함문 찾기
-                include_lines = []
+
+                # 헤더 포함문/using/import 문 찾기 (C/C++의 #include, C#의 using, Objective-C의 #import)
+                import_using_lines = []
                 for i, line in enumerate(lines):
-                    if re.match(r'^\s*#include\b', line):
-                        include_lines.append(line)
-                
-                includes_text = '\n'.join(include_lines)
-                
-                # 정규식 패턴 매칭으로 함수/클래스 찾기
-                def find_block_end(start_line, opening_char='{', closing_char='}'):
+                    if re.match(r'^\s*(#include|using|import)\b', line):
+                        import_using_lines.append(line)
+
+                imports_text = '\n'.join(import_using_lines)
+
+                def find_block_end(start_line_idx, opening_char='{', closing_char='}'):
                     balance = 0
-                    for i in range(start_line, len(lines)):
+                    for i in range(start_line_idx, len(lines)):
                         line = lines[i]
                         balance += line.count(opening_char) - line.count(closing_char)
                         if balance <= 0:
                             return i
                     return len(lines) - 1
-                
+
                 i = 0
                 while i < len(lines):
                     line = lines[i]
-                    
-                    # 클래스/구조체 찾기
-                    class_match = re.search(class_pattern, line)
+
+                    # 클래스/구조체/네임스페이스 등 찾기
+                    class_match = re.search(class_struct_pattern, line)
                     if class_match:
+                        name = class_match.group(2)
                         start_line = i
                         end_line = find_block_end(i)
-                        class_content = '\n'.join(lines[start_line:end_line + 1])
-                        chunks.append((class_content, start_line, end_line, None, class_match.group(2), 1, len(lines)))
+                        content = '\n'.join(lines[start_line:end_line + 1])
+                        chunks.append((content, 0, len(enc.encode(content)), None, name, start_line + 1, end_line + 1, None, 1, None)) # TODO: complexity, parent_entity, inheritance
                         i = end_line + 1
                         continue
-                    
-                    # 함수 찾기
-                    func_match = re.search(function_pattern, line)
+
+                    # 함수/메소드 찾기
+                    func_match = re.search(function_method_pattern, line)
                     if func_match:
+                        name = func_match.group(3)
                         start_line = i
                         end_line = find_block_end(i)
-                        func_content = '\n'.join(lines[start_line:end_line + 1])
-                        chunks.append((func_content, start_line, end_line, None, func_match.group(3), 1, len(lines)))
+                        content = '\n'.join(lines[start_line:end_line + 1])
+                        chunks.append((content, 0, len(enc.encode(content)), name, None, start_line + 1, end_line + 1, None, 1, None)) # TODO: complexity, parent_entity, inheritance
                         i = end_line + 1
                         continue
-                    
+
                     i += 1
-                
+
+                # 구조적 청킹에 실패하거나 남은 부분이 있으면 토큰 기반 청킹으로 폴백
+                if not chunks:
+                    print(f"[INFO] chunk_c_family: 구조적 청크 없음, 토큰 기반 청킹 적용")
+                    for chunk, t_start, t_end in split_by_tokens(source_code, max_tokens=256, overlap=64):
+                        chunks.append((chunk, t_start, t_end, None, None, 1, len(source_code.splitlines()), None, 0, None))
+
                 return chunks
 
             # 1. 전체 청크 수집
@@ -1167,8 +1177,8 @@ class RepositoryEmbedder:
                     chunks = chunk_typescript(content)
                 elif ext in ['.java']:
                     chunks = chunk_java(content)
-                elif ext in ['.cpp', '.h', '.hpp', '.c']:
-                    chunks = chunk_cpp(content)
+                elif ext in ['.cpp', '.h', '.hpp', '.c', '.cs']:
+                    chunks = chunk_c_family(content)
                 else:
                     # 오류 수정: 일반 파일은 split_by_tokens로 처리하고 7개 필드 구조에 맞게 조정
                     simple_chunks = split_by_tokens(content, max_tokens=256, overlap=64)

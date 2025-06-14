@@ -1,10 +1,16 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# OPENAI_API_KEY를 CHROMA_OPENAI_API_KEY로 설정 (chromadb 호환성을 위함)
+os.environ["CHROMA_OPENAI_API_KEY"] = os.environ.get("OPENAI_API_KEY", "")
+
 from flask import Flask, render_template, request, redirect, url_for, jsonify, Response, session, flash
 import uuid
 import time
 from github_analyzer import analyze_repository, GitHubRepositoryFetcher
 from chat_handler import handle_chat, handle_modify_request, apply_changes
-from dotenv import load_dotenv
-import os
 import sys
 import db
 import traceback
@@ -13,8 +19,6 @@ import openai
 from chat_handler import detect_github_push_intent
 import requests
 import bcrypt  # 비밀번호 해싱을 위한 모듈 추가
-
-load_dotenv()
 
 # GitHub OAuth 설정
 GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID")

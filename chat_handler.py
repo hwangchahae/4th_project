@@ -13,7 +13,7 @@ import db  # DB 모듈 임포트 추가
 enc = tiktoken.get_encoding("cl100k_base")
 
 # top-k 유사 청크 개수
-TOP_K = 5
+TOP_K = 20
 
 # 새로운 역할과 메타데이터를 활용한 시스템 프롬프트
 SYSTEM_PROMPT_QA = """당신은 코드 분석과 이해에 특화된 전문적인 소프트웨어 엔지니어 AI입니다.
